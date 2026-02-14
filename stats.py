@@ -11,8 +11,8 @@ from reportlab.lib import colors
 import numpy as np
 
 OUTPUT_DIR = "output"
-CSV_DATA_FILE = "janvier 2026.csv"
 CSV_DATA_FILE = "decembre 2025.csv"
+CSV_DATA_FILE = "janvier 2026.csv"
 DATA_DIR = "data"
 OUTPUT_PATH = f"{OUTPUT_DIR}/rapport_qualite - {CSV_DATA_FILE.replace('.csv', '.pdf')}"
 DATA_PATH = f"{DATA_DIR}/{CSV_DATA_FILE}"
@@ -100,6 +100,23 @@ def get_temps_sur_site(lecteur):
     # print(
     #     f"Temps moyen sur site : {decimal_vers_hhmm(total_temps / nombre_lignes)}")
     return {"total_temps_sur_site": total_temps, "nombre_interventions": nombre_lignes, "moyenne": total_temps / nombre_lignes if nombre_lignes > 0 else 0}
+
+
+def repartition_motif_est(lecteur):
+    motifs = {}
+    next(lecteur, None)  # saute l'en-tête
+
+    for ligne in lecteur:
+        motif = ligne[24].strip()
+        if motif[:4]:
+            if motif not in motifs:
+                motifs[motif] = 0
+            motifs[motif] += 1
+
+    total_interventions = sum(motifs.values())
+    motifs = dict(
+        sorted(motifs.items(), key=lambda item: item[1], reverse=True))
+    return motifs
 
 
 def repartition_priorites(lecteur):
@@ -294,16 +311,21 @@ def create_graph_ages(ages):
     plt.close()
 
 
-def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen):
+def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, motifs_EST):
     doc = SimpleDocTemplate(OUTPUT_PATH, pagesize=A4)
     styles = getSampleStyleSheet()
     elements = []
-    style_texte = ParagraphStyle(
+    style_texte = {'texte_grand': ParagraphStyle(
         'texte_grand',
         parent=styles['Normal'],
         fontSize=14,     # taille du texte
         leading=18       # interligne
-    )
+    ), 'texte_normal': ParagraphStyle(
+        'texte_normal',
+        parent=styles['Normal'],
+        fontSize=12,     # taille du texte
+        leading=16       # interligne
+    )}
 
     # Ajouter un titre
     title = Paragraph(
@@ -317,7 +339,26 @@ def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen):
         f"<font color='#D62828'><b>{nombre_interventions} interventions</b></font> "
         f"entre l'urgence et la P3."
     )
-    elements.append(Paragraph(texte_nombre_interventions, style_texte))
+    elements.append(Paragraph(texte_nombre_interventions,
+                    style_texte['texte_grand']))
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Ajouter les motifs EST les plus courants
+    texte_intro_motifs_est = "Les motifs EST les plus courants étaient : <br/>"
+    elements.append(Paragraph(texte_intro_motifs_est,
+                    style_texte['texte_grand']))
+
+    nb_inter_motif_est = sum(motifs_EST.values())
+    texte_motifs_est = ""
+    i = 0
+    for motif, count in motifs_EST.items():
+        if motif[:4] == "0000":
+            continue  # on ignore les motifs vides ou non renseignés
+        texte_motifs_est += f"{i+1}. {motif} avec <b>{(count / nb_inter_motif_est) * 100:.1f}%</b> ({count}) des interventions <br/>"
+        if i >= 4:  # on affiche les 5 motifs les plus courants
+            break
+        i = i + 1
+    elements.append(Paragraph(texte_motifs_est, style_texte['texte_normal']))
     elements.append(Spacer(1, 0.5 * inch))
 
     # Ajouter le temps moyen sur site
@@ -326,12 +367,13 @@ def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen):
         f"<font color='#D62828'><b>{decimal_vers_hhmm(temps_moyen_sur_site)}</b></font>"
         f" sur site."
     )
-    elements.append(Paragraph(texte_temps_moyen, style_texte))
+    elements.append(Paragraph(texte_temps_moyen, style_texte['texte_grand']))
     elements.append(Spacer(1, 0.5 * inch))
 
     # Ajouter une introduction pour expliquer les graphiques
     introduction_graphique = "Ci-dessous les graphiques de répartition des interventions par priorités, ambulances et NACAs."
-    elements.append(Paragraph(introduction_graphique, style_texte))
+    elements.append(Paragraph(introduction_graphique,
+                    style_texte['texte_grand']))
 
     # Ajouter les graphiques
 
@@ -356,7 +398,7 @@ def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen):
         f"<font color='#D62828'><b>{age_moyen:.1f}</b></font>"
         f" ans. Ci-dessous, la répartition détaillée de leurs âges."
     )
-    elements.append(Paragraph(texte_temps_moyen, style_texte))
+    elements.append(Paragraph(texte_temps_moyen, style_texte['texte_grand']))
     elements.append(Spacer(1, 0.5 * inch))
 
     # Graphique des âges
@@ -411,8 +453,14 @@ def main():
         temps_sur_site = get_temps_sur_site(lecteur)
         print("Calcul du temps sur site terminé.")
 
+        # Calcul du nombre d'interventions par motif EST
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        motifs_EST = repartition_motif_est(lecteur)
+        print("Calcul de la répartition des motifs EST terminé.")
+
         generate_pdf_report(
-            nb_interventions_total, temps_sur_site['moyenne'], age_moyen=np.mean(ages))
+            nb_interventions_total, temps_sur_site['moyenne'], age_moyen=np.mean(ages), motifs_EST=motifs_EST)
         print(f"Rapport PDF généré : {OUTPUT_PATH}")
 
 
@@ -422,10 +470,16 @@ def tests():
 
     with open(chemin_fichier, newline="", encoding="utf-8") as csvfile:
         lecteur = csv.reader(csvfile, delimiter=";")
-        print("Calcul du temps sur site...")
-        temps_sur_site = get_temps_sur_site(lecteur)
-        print(
-            f"Temps total sur site : {decimal_vers_hhmm(temps_sur_site['total_temps_sur_site'])}")
+        i = 0
+        motifs_EST = repartition_motif_est(lecteur)
+        nb_inter_motif_est = sum(motifs_EST.values())
+        for motif, count in motifs_EST.items():
+            # print(f"Motif EST {motif} : {count} interventions")
+            print(
+                f"{i + 1}. {(count / nb_inter_motif_est) * 100:.1f}% des interventions en motif {motif} ({count})")
+            if i >= 2:
+                break
+            i = i + 1
 
 # ====== EXECUTION =====
 
@@ -439,8 +493,8 @@ main()
 # DONE : pourcentage p1p2p3s1s1
 # DONE : repartition par ambulance
 # DONE : repartition des nacas
+# DONE : age des patients (boite a moustache)
 #
-# age des patients (boite a moustache)
 # EST les plus courant
 #
 # le plus d'intervention en 2 et 5h
