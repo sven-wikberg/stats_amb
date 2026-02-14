@@ -6,19 +6,31 @@ from reportlab.platypus import SimpleDocTemplate, Image, Spacer, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib import colors
+import numpy as np
 
 OUTPUT_DIR = "output"
 CSV_DATA_FILE = "janvier 2026.csv"
-# CSV_DATA_FILE = "decembre 2025.csv"
+CSV_DATA_FILE = "decembre 2025.csv"
 DATA_DIR = "data"
 OUTPUT_PATH = f"{OUTPUT_DIR}/rapport_qualite - {CSV_DATA_FILE.replace('.csv', '.pdf')}"
 DATA_PATH = f"{DATA_DIR}/{CSV_DATA_FILE}"
+
+GRAPH_PRIORITES_PATH = f"{OUTPUT_DIR}/graph_priorites.png"
+GRAPH_AMBULANCES_PATH = f"{OUTPUT_DIR}/graph_ambulances.png"
+GRAPH_NACAS_PATH = f"{OUTPUT_DIR}/graph_nacas.png"
+GRAPH_AGES_PATH = f"{OUTPUT_DIR}/graph_ages.png"
 
 
 def decimal_vers_hhmm(heures):
     h = int(heures)
     m = int(round((heures - h) * 60))
-    return f"{h:02d}:{m:02d}"
+    if h == 0 and m == 1:
+        return "1 minute"
+    if h == 0:
+        return f"{m:02d} minutes"
+    return f"{h:02d} heures et {m:02d} minutes"
 
 
 # 0 - Date
@@ -52,10 +64,10 @@ def decimal_vers_hhmm(heures):
 # 28 - Trauma / Médical
 # 29 - Protocoles
 # 30 - Sexe
-# 31 - Age
-# 32 - Date de naissance
+# 31 - Date de naissance
+# 32 - Age
 
-def temps_moyen_sur_site(lecteur):
+def get_temps_sur_site(lecteur):
     total_temps = 0
     nombre_lignes = 0
 
@@ -85,8 +97,9 @@ def temps_moyen_sur_site(lecteur):
 
     # print(f"Nombre de lignes (interventions) comptées : {nombre_lignes}")
     # print(f"Temps total sur site : {decimal_vers_hhmm(total_temps)}")
-    print(
-        f"Temps moyen sur site : {decimal_vers_hhmm(total_temps / nombre_lignes)}")
+    # print(
+    #     f"Temps moyen sur site : {decimal_vers_hhmm(total_temps / nombre_lignes)}")
+    return {"total_temps_sur_site": total_temps, "nombre_interventions": nombre_lignes, "moyenne": total_temps / nombre_lignes if nombre_lignes > 0 else 0}
 
 
 def repartition_priorites(lecteur):
@@ -131,7 +144,7 @@ def create_graph_priorites(priorites):
     plt.xticks(rotation=15)
     plt.tight_layout()
 
-    graph_path = "graph_priorites.png"
+    graph_path = GRAPH_PRIORITES_PATH
     plt.savefig(graph_path)
     plt.close()
 
@@ -167,10 +180,9 @@ def create_graph_ambulances(ambulances):
         plt.text(i, v + 2, f"{pourcentage:.2f}%", ha='center')
     plt.title("Répartition interventions par ambulance")
     plt.ylabel("Nombre d'interventions")
-    plt.xticks(rotation=15)
     plt.tight_layout()
 
-    graph_path = "graph_ambulances.png"
+    graph_path = GRAPH_AMBULANCES_PATH
     plt.savefig(graph_path)
     plt.close()
 
@@ -218,18 +230,80 @@ def create_graph_nacas(nacas):
         plt.text(i, v + 2, f"{pourcentage:.2f}%", ha='center')
     plt.title("Répartition interventions par NACA")
     plt.ylabel("Nombre d'interventions")
-    plt.xticks(rotation=15)
+    plt.xlabel("NACA")
     plt.tight_layout()
 
-    graph_path = "graph_nacas.png"
+    graph_path = GRAPH_NACAS_PATH
     plt.savefig(graph_path)
     plt.close()
 
 
-def generate_pdf_report():
+def get_age_patients(lecteur):
+    ages = []
+    next(lecteur, None)  # saute l'en-tête
+
+    for ligne in lecteur:
+        age_str = ligne[32].strip()
+        date_de_naissance_str = ligne[31].strip()
+        if age_str.isdigit() and date_de_naissance_str != "":
+            ages.append(int(age_str))
+
+    return ages
+
+
+def create_graph_ages(ages):
+    # Calcul des stats
+    age_moyen = np.mean(ages)
+    age_median = np.median(ages)
+    age_min = np.min(ages)
+    age_max = np.max(ages)
+    nb_patients = len(ages)
+
+    plt.figure(figsize=(6, 4))
+
+    # Violin plot horizontal
+    parts = plt.violinplot(
+        ages,
+        vert=False,
+        showmeans=False,
+        showmedians=False,
+        showextrema=True
+    )
+
+    # Ligne médiane
+    plt.axvline(age_median, linestyle='-', linewidth=2,
+                label=f"Age médian: {age_median:.1f}")
+
+    # Ligne moyenne
+    plt.axvline(age_moyen, linestyle='--', linewidth=2,
+                label=f"Age moyen: {age_moyen:.1f}")
+
+    # Lignes min et max
+    plt.axvline(age_min, linestyle=' ', label=f"Age minimum: {age_min}")
+    plt.axvline(age_max, linestyle=' ', label=f"Age maximum: {age_max}")
+    plt.axvline(0, linestyle=' ', label=f"Nombre de patients: {nb_patients}")
+
+    plt.yticks([])  # enlève l'axe Y inutile
+    plt.xlabel("Âge")
+    plt.title("Distribution des âges")
+
+    plt.legend(loc='upper left')
+    plt.tight_layout()
+
+    plt.savefig(GRAPH_AGES_PATH, dpi=300)
+    plt.close()
+
+
+def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen):
     doc = SimpleDocTemplate(OUTPUT_PATH, pagesize=A4)
     styles = getSampleStyleSheet()
     elements = []
+    style_texte = ParagraphStyle(
+        'texte_grand',
+        parent=styles['Normal'],
+        fontSize=14,     # taille du texte
+        leading=18       # interligne
+    )
 
     # Ajouter un titre
     title = Paragraph(
@@ -237,62 +311,143 @@ def generate_pdf_report():
     elements.append(title)
     elements.append(Spacer(1, 0.5 * inch))
 
+    # Ajouter le nombre d'interventions
+    texte_nombre_interventions = (
+        f"Ce mois, ACE a effectué "
+        f"<font color='#D62828'><b>{nombre_interventions} interventions</b></font> "
+        f"entre l'urgence et la P3."
+    )
+    elements.append(Paragraph(texte_nombre_interventions, style_texte))
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Ajouter le temps moyen sur site
+    texte_temps_moyen = (
+        f"Et en moyenne, nous avons passé "
+        f"<font color='#D62828'><b>{decimal_vers_hhmm(temps_moyen_sur_site)}</b></font>"
+        f" sur site."
+    )
+    elements.append(Paragraph(texte_temps_moyen, style_texte))
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Ajouter une introduction pour expliquer les graphiques
+    introduction_graphique = "Ci-dessous les graphiques de répartition des interventions par priorités, ambulances et NACAs."
+    elements.append(Paragraph(introduction_graphique, style_texte))
+
     # Ajouter les graphiques
-    for graph in ["graph_priorites.png", "graph_ambulances.png", "graph_nacas.png"]:
-        img = Image(graph, width=6 * inch, height=4 * inch)
-        elements.append(img)
-        elements.append(Spacer(1, 0.5 * inch))
+
+    # Graphique des ambulances
+    img = Image(GRAPH_AMBULANCES_PATH, width=6 * inch, height=4 * inch)
+    elements.append(img)
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Graphique des priorités
+    img = Image(GRAPH_PRIORITES_PATH, width=6 * inch, height=4 * inch)
+    elements.append(img)
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Graphique des NACAs
+    img = Image(GRAPH_NACAS_PATH, width=6 * inch, height=4 * inch)
+    elements.append(img)
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Texte intro pour le graphique des âges
+    texte_temps_moyen = (
+        f"Nos patients avaient en moyenne "
+        f"<font color='#D62828'><b>{age_moyen:.1f}</b></font>"
+        f" ans. Ci-dessous, la répartition détaillée de leurs âges."
+    )
+    elements.append(Paragraph(texte_temps_moyen, style_texte))
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Graphique des âges
+    img = Image(GRAPH_AGES_PATH, width=6 * inch, height=4 * inch)
+    elements.append(img)
+    elements.append(Spacer(1, 0.5 * inch))
 
     doc.build(elements)
 
 
-# chemin_fichier = "janvier 2026.csv"
-chemin_fichier = DATA_PATH
-print(f"Lecture du fichier CSV : {chemin_fichier}")
+def main():
+    chemin_fichier = DATA_PATH
+    print(f"Lecture du fichier CSV : {chemin_fichier}")
 
-with open(chemin_fichier, newline="", encoding="utf-8") as csvfile:
+    with open(chemin_fichier, newline="", encoding="utf-8") as csvfile:
 
-    # ==== CODE PRINCIPAL ====
+        print("Calcul du nombre d'interventions...")
+        lecteur = csv.reader(csvfile, delimiter=";")
+        nb_interventions_total = len(
+            list(lecteur)) - 1  # pour sauter l'en-tête
 
-    # print("Génération des graphiques...")
+        print("Génération des graphiques...")
+        # Génération du graphique des priorités
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        lecteur = csv.reader(csvfile, delimiter=";")
+        create_graph_priorites(repartition_priorites(lecteur))
+        print("Graphique des priorités généré.")
 
-    # lecteur = csv.reader(csvfile, delimiter=";")
-    # create_graph_priorites(repartition_priorites(lecteur))
-    # print("Graphique des priorités généré.")
+        # Génération du graphique des ambulances
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        create_graph_ambulances(repartition_ambulances(lecteur))
+        print("Graphique des ambulances généré.")
 
-    # csvfile.seek(0)  # revenir au début du fichier pour relire les données
-    # lecteur = csv.reader(csvfile, delimiter=";")
-    # create_graph_ambulances(repartition_ambulances(lecteur))
-    # print("Graphique des ambulances généré.")
+        # Génération du graphique des NACAs
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        create_graph_nacas(repartition_nacas(lecteur))
+        print("Graphique des NACA généré.")
 
-    # csvfile.seek(0)  # revenir au début du fichier pour relire les données
-    # lecteur = csv.reader(csvfile, delimiter=";")
-    # create_graph_nacas(repartition_nacas(lecteur))
-    # print("Graphique des NACA généré.")
+        # Génération du graphique des âges
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        ages = get_age_patients(lecteur)
+        create_graph_ages(ages)
+        print("Graphique des âges généré.")
 
-    # generate_pdf_report()
-    # print(f"Rapport PDF généré : {OUTPUT_PATH}")
+        # Calcul du temps sur site
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        temps_sur_site = get_temps_sur_site(lecteur)
+        print("Calcul du temps sur site terminé.")
 
-    # === TESTS ===
+        generate_pdf_report(
+            nb_interventions_total, temps_sur_site['moyenne'], age_moyen=np.mean(ages))
+        print(f"Rapport PDF généré : {OUTPUT_PATH}")
 
-    lecteur = csv.reader(csvfile, delimiter=";")
-    temps_moyen_sur_site(lecteur)
 
-    # === TODO ===
+def tests():
+    chemin_fichier = DATA_PATH
+    print(f"Lecture du fichier CSV : {chemin_fichier}")
 
-    # DONE : temps sur site
-    # DONE : pourcentage p1p2p3s1s1
-    # DONE : repartition par ambulance
-    # DONE : repartition des nacas
-    #
-    # age des patients (boite a moustache)
-    # EST les plus courant
-    #
-    # le plus d'intervention en 2 et 5h
-    # personne avec le plus de naca haut
-    # personne avec le plus de naca bas
-    # p3 qui finissent en naca haut
-    # qui a fait le plus d'interventions
-    # pourcentga de leader/secondage
-    # collegue preferé
-    # le binome avec le plus d'interventions
+    with open(chemin_fichier, newline="", encoding="utf-8") as csvfile:
+        lecteur = csv.reader(csvfile, delimiter=";")
+        print("Calcul du temps sur site...")
+        temps_sur_site = get_temps_sur_site(lecteur)
+        print(
+            f"Temps total sur site : {decimal_vers_hhmm(temps_sur_site['total_temps_sur_site'])}")
+
+# ====== EXECUTION =====
+
+
+main()
+# tests()
+
+# === TODO ===
+
+# DONE : temps sur site
+# DONE : pourcentage p1p2p3s1s1
+# DONE : repartition par ambulance
+# DONE : repartition des nacas
+#
+# age des patients (boite a moustache)
+# EST les plus courant
+#
+# le plus d'intervention en 2 et 5h
+# personne avec le plus de naca haut
+# personne avec le plus de naca bas
+# p3 qui finissent en naca haut
+# qui a fait le plus d'interventions
+# pourcentga de leader/secondage
+# collegue preferé
+# le binome avec le plus d'interventions
