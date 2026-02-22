@@ -21,6 +21,7 @@ GRAPH_PRIORITES_PATH = f"{OUTPUT_DIR}/graph_priorites.png"
 GRAPH_AMBULANCES_PATH = f"{OUTPUT_DIR}/graph_ambulances.png"
 GRAPH_NACAS_PATH = f"{OUTPUT_DIR}/graph_nacas.png"
 GRAPH_AGES_PATH = f"{OUTPUT_DIR}/graph_ages.png"
+GRAPH_INTER_BY_HEURE_PATH = f"{OUTPUT_DIR}/graph_inter_by_heure.png"
 
 
 def decimal_vers_hhmm(heures):
@@ -100,6 +101,43 @@ def get_temps_sur_site(lecteur):
     # print(
     #     f"Temps moyen sur site : {decimal_vers_hhmm(total_temps / nombre_lignes)}")
     return {"total_temps_sur_site": total_temps, "nombre_interventions": nombre_lignes, "moyenne": total_temps / nombre_lignes if nombre_lignes > 0 else 0}
+
+
+def get_naca_by_personne(lecteur):
+    naca_par_personne = {}
+    next(lecteur, None)  # saute l'en-tête
+
+    for ligne in lecteur:
+        leader = ligne[7].strip()
+        equipier = ligne[8].strip()
+        naca = ligne[26].strip()
+
+        if leader and naca:
+            if leader not in naca_par_personne:
+                naca_par_personne[leader] = []
+            naca_par_personne[leader].append(naca)
+
+        if equipier and naca:
+            if equipier not in naca_par_personne:
+                naca_par_personne[equipier] = []
+            naca_par_personne[equipier].append(naca)
+
+    return naca_par_personne
+
+
+def get_naca_of_p3(lecteur):
+    naca_of_p3 = {"0": 0, "1": 0, "2": 0, "3": 0,
+                  "4": 0, "5": 0, "6": 0, "7": 0, "9": 0}
+    next(lecteur, None)  # saute l'en-tête
+
+    for ligne in lecteur:
+        priorite = ligne[6].strip()
+        naca = ligne[26].strip()
+
+        if priorite == "P3" and naca:
+            naca_of_p3[naca] += 1
+
+    return naca_of_p3
 
 
 def repartition_motif_est(lecteur):
@@ -255,6 +293,60 @@ def create_graph_nacas(nacas):
     plt.close()
 
 
+def create_graph_heures(inter_by_heure):
+    palette_heures = {
+        # Nuit profonde
+        '00': "#0B132B",
+        '01': "#0B132B",
+        '02': "#1C2541",
+        '03': "#1C2541",
+        '04': "#3A506B",
+
+        # Aube
+        '05': "#5BC0BE",
+        '06': "#89C2D9",
+        '07': "#A9D6E5",
+
+        # Matin
+        '08': "#F1FAEE",
+        '09': "#FFE8A1",
+        '10': "#FFD166",
+        '11': "#FFC43D",
+
+        # Midi (maximum activité lumineuse)
+        '12': "#FFB703",
+        '13': "#FFB703",
+        '14': "#FFD166",
+
+        # Après-midi
+        '15': "#F4A261",
+        '16': "#E76F51",
+        '17': "#D62828",
+
+        # Soirée
+        '18': "#BC4749",
+        '19': "#6D597A",
+        '20': "#355070",
+
+        # Nuit
+        '21': "#1D3557",
+        '22': "#1D3557",
+        '23': "#0B132B"
+    }
+
+    plt.figure()
+    plt.bar(inter_by_heure.keys(), inter_by_heure.values(), color=[
+            palette_heures[k] for k in inter_by_heure.keys()], edgecolor='black')
+    plt.title("Nombre d'interventions par heure")
+    plt.ylabel("Nombre d'interventions")
+    plt.xlabel("Heure")
+    plt.tight_layout()
+
+    graph_path = GRAPH_INTER_BY_HEURE_PATH
+    plt.savefig(graph_path)
+    plt.close()
+
+
 def get_age_patients(lecteur):
     ages = []
     next(lecteur, None)  # saute l'en-tête
@@ -266,6 +358,52 @@ def get_age_patients(lecteur):
             ages.append(int(age_str))
 
     return ages
+
+
+def get_nacas_hauts(lecteur):
+    nacas_by_personne = get_naca_by_personne(lecteur)
+    nb_nacas_haut = {}
+    nb_nacas = {}
+    for personne, nacas in nacas_by_personne.items():
+        # print(f"{personne} : {nacas}")
+        for naca in nacas:
+            if naca in ["5", "6", "7"]:
+                if personne not in nb_nacas_haut:
+                    nb_nacas_haut[personne] = 0
+                nb_nacas_haut[personne] += 1
+            if personne not in nb_nacas:
+                nb_nacas[personne] = 0
+            nb_nacas[personne] += 1
+    output = {}
+    for personne in nb_nacas_haut:
+        output[personne] = (nb_nacas[personne], nb_nacas_haut[personne], (
+            nb_nacas_haut[personne] / nb_nacas[personne]) if nb_nacas[personne] > 0 else 0)
+    sorted_output = dict(
+        sorted(output.items(), key=lambda item: item[1][2], reverse=True))
+    return sorted_output
+
+
+def get_nacas_bas(lecteur):
+    nacas_by_personne = get_naca_by_personne(lecteur)
+    nb_nacas_bas = {}
+    nb_nacas = {}
+    for personne, nacas in nacas_by_personne.items():
+        # print(f"{personne} : {nacas}")
+        for naca in nacas:
+            if naca in ["0", "1", "9"]:
+                if personne not in nb_nacas_bas:
+                    nb_nacas_bas[personne] = 0
+                nb_nacas_bas[personne] += 1
+            if personne not in nb_nacas:
+                nb_nacas[personne] = 0
+            nb_nacas[personne] += 1
+    output = {}
+    for personne in nb_nacas_bas:
+        output[personne] = (nb_nacas[personne], nb_nacas_bas[personne], (
+            nb_nacas_bas[personne] / nb_nacas[personne]) if nb_nacas[personne] > 0 else 0)
+    sorted_output = dict(
+        sorted(output.items(), key=lambda item: item[1][2], reverse=True))
+    return sorted_output
 
 
 def create_graph_ages(ages):
@@ -311,7 +449,20 @@ def create_graph_ages(ages):
     plt.close()
 
 
-def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, motifs_EST):
+def get_nb_inter_by_heure(lecteur):
+    nb_inter_by_heure = {str(h).zfill(2): 0 for h in range(24)}
+    next(lecteur, None)  # saute l'en-tête
+
+    for ligne in lecteur:
+        horaire_str = ligne[15].strip()
+        if re.match(r'^\d{2}:\d{2}$', horaire_str):
+            heure = horaire_str.split(":")[0]
+            nb_inter_by_heure[heure] += 1
+
+    return nb_inter_by_heure
+
+
+def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, motifs_EST, nacas_bas, nacas_hauts, nacas_p3):
     doc = SimpleDocTemplate(OUTPUT_PATH, pagesize=A4)
     styles = getSampleStyleSheet()
     elements = []
@@ -329,7 +480,7 @@ def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, m
 
     # Ajouter un titre
     title = Paragraph(
-        "Rapport de Qualité - Interventions Ambulance", styles['Title'])
+        "Rapport Mensuel - Interventions Ambulance", styles['Title'])
     elements.append(title)
     elements.append(Spacer(1, 0.5 * inch))
 
@@ -387,9 +538,35 @@ def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, m
     elements.append(img)
     elements.append(Spacer(1, 0.5 * inch))
 
+    # Naca pour la p3
+    total_nacas_p3 = sum(nacas_p3.values())
+    p3_naca_hauts = sum(nacas_p3[naca] for naca in ["4", "5", "6", "7"])
+    texte_naca_p3 = f"Ce mois ci, en P3, <b>{p3_naca_hauts}</b> interventions sur <b>{total_nacas_p3}</b> ont été classées en NACA 4+, soit <b>{(p3_naca_hauts / total_nacas_p3) * 100:.1f}%</b> des P3."
+    elements.append(Paragraph(texte_naca_p3, style_texte['texte_grand']))
+    elements.append(Spacer(1, 0.5 * inch))
+
     # Graphique des NACAs
     img = Image(GRAPH_NACAS_PATH, width=6 * inch, height=4 * inch)
     elements.append(img)
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Naca bas et haut par personne
+    texte_nacas_par_personne = "Voici les 3 personnes qui se démarquent par leur nombre d'intervention avec des NACAs bas (0, 1, 9) : <br/>"
+    i = 0
+    for personne, (nb_nacas, nb_nacas_bas, pourcentage) in nacas_bas.items():
+        texte_nacas_par_personne += f"{i+1}. <b>{pourcentage:.1%}</b> des interventions de <b>{personne}</b> ({nb_nacas_bas}/{nb_nacas})<br/>"
+        if i >= 2:  # on affiche les 3 permiers
+            break
+        i = i + 1
+    texte_nacas_par_personne += "<br/>Et voici les 3 personnes qui se démarquent par leur nombre d'intervention avec des NACAs hauts (5, 6, 7) : <br/>"
+    i = 0
+    for personne, (nb_nacas, nb_nacas_haut, pourcentage) in nacas_hauts.items():
+        texte_nacas_par_personne += f"{i+1}. <b>{pourcentage:.1%}</b> des interventions de <b>{personne}</b> ({nb_nacas_haut}/{nb_nacas})<br/>"
+        if i >= 2:  # on affiche les 3 permiers
+            break
+        i = i + 1
+    elements.append(Paragraph(texte_nacas_par_personne,
+                    style_texte['texte_normal']))
     elements.append(Spacer(1, 0.5 * inch))
 
     # Texte intro pour le graphique des âges
@@ -459,8 +636,26 @@ def main():
         motifs_EST = repartition_motif_est(lecteur)
         print("Calcul de la répartition des motifs EST terminé.")
 
+        # Calcul du nombre de NACAs bas par personne
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        nacas_bas = get_nacas_bas(lecteur)
+        print("Calcul du nombre de NACAs bas par personne terminé.")
+
+        # Calcul du nombre de NACAs hauts par personne
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        nacas_hauts = get_nacas_hauts(lecteur)
+        print("Calcul du nombre de NACAs hauts par personne terminé.")
+
+        # Calcul du nombre des nacas pour la p3
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        nacas_p3 = get_naca_of_p3(lecteur)
+        print("Calcul du nombre de NACAs pour les P3 terminé.")
+
         generate_pdf_report(
-            nb_interventions_total, temps_sur_site['moyenne'], age_moyen=np.mean(ages), motifs_EST=motifs_EST)
+            nb_interventions_total, temps_sur_site['moyenne'], age_moyen=np.mean(ages), motifs_EST=motifs_EST, nacas_bas=nacas_bas, nacas_hauts=nacas_hauts, nacas_p3=nacas_p3)
         print(f"Rapport PDF généré : {OUTPUT_PATH}")
 
 
@@ -470,22 +665,20 @@ def tests():
 
     with open(chemin_fichier, newline="", encoding="utf-8") as csvfile:
         lecteur = csv.reader(csvfile, delimiter=";")
-        i = 0
-        motifs_EST = repartition_motif_est(lecteur)
-        nb_inter_motif_est = sum(motifs_EST.values())
-        for motif, count in motifs_EST.items():
-            # print(f"Motif EST {motif} : {count} interventions")
-            print(
-                f"{i + 1}. {(count / nb_inter_motif_est) * 100:.1f}% des interventions en motif {motif} ({count})")
-            if i >= 2:
-                break
-            i = i + 1
+        inter_by_heure = get_nb_inter_by_heure(lecteur)
+        print("Nombre d'interventions par heure :")
+        print(inter_by_heure)
+        for heure, count in inter_by_heure.items():
+            print(f"{heure}h : {count} interventions")
+        create_graph_heures(inter_by_heure)
+        print("Graphique des interventions par heure généré.")
+
 
 # ====== EXECUTION =====
 
 
-main()
-# tests()
+# main()
+tests()
 
 # === TODO ===
 
@@ -494,14 +687,22 @@ main()
 # DONE : repartition par ambulance
 # DONE : repartition des nacas
 # DONE : age des patients (boite a moustache)
+# DONE : EST les plus courant
+# DONE : personne avec le plus de naca haut
+# DONE : personne avec le plus de naca bas
+# DONE : p3 qui finissent en naca haut
 #
-# EST les plus courant
 #
 # le plus d'intervention en 2 et 5h
-# personne avec le plus de naca haut
-# personne avec le plus de naca bas
-# p3 qui finissent en naca haut
+#
+#
 # qui a fait le plus d'interventions
 # pourcentga de leader/secondage
-# collegue preferé
 # le binome avec le plus d'interventions
+# sur place le plus court avec transport
+# prise en charge avc la plus rapide
+# polytrauma le plus rapide
+# le plus d'oh
+# ple plus de ped
+# inter la plus longue
+# 42 le plus long
