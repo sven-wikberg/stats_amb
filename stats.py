@@ -2,17 +2,18 @@ import csv
 from datetime import datetime
 import re
 import matplotlib.pyplot as plt
-from reportlab.platypus import SimpleDocTemplate, Image, Spacer, Paragraph
+from reportlab.platypus import SimpleDocTemplate, Image, Spacer, Paragraph, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib import colors
+from reportlab.lib.units import cm
 import numpy as np
 
 OUTPUT_DIR = "output"
-CSV_DATA_FILE = "decembre 2025.csv"
 CSV_DATA_FILE = "janvier 2026.csv"
+CSV_DATA_FILE = "decembre 2025.csv"
 DATA_DIR = "data"
 OUTPUT_PATH = f"{OUTPUT_DIR}/rapport_qualite - {CSV_DATA_FILE.replace('.csv', '.pdf')}"
 DATA_PATH = f"{DATA_DIR}/{CSV_DATA_FILE}"
@@ -22,6 +23,11 @@ GRAPH_AMBULANCES_PATH = f"{OUTPUT_DIR}/graph_ambulances.png"
 GRAPH_NACAS_PATH = f"{OUTPUT_DIR}/graph_nacas.png"
 GRAPH_AGES_PATH = f"{OUTPUT_DIR}/graph_ages.png"
 GRAPH_INTER_BY_HEURE_PATH = f"{OUTPUT_DIR}/graph_inter_by_heure.png"
+
+LIMITE_MIN_INTER = 5  # pour les statistiques par personne, on ne prend que les personnes ayant au moins 5 interventions pour éviter les biais liés à un petit nombre d'interventions
+
+MOIS = "décembre"
+ANNEE = "2025"
 
 
 def decimal_vers_hhmm(heures):
@@ -122,6 +128,9 @@ def get_naca_by_personne(lecteur):
                 naca_par_personne[equipier] = []
             naca_par_personne[equipier].append(naca)
 
+    # on garde uniquement les personnes qui ont au moins LIMITE_MIN_INTER interventions pour éviter les biais liés à un petit nombre d'interventions
+    naca_par_personne = {personne: nacas for personne, nacas in naca_par_personne.items(
+    ) if len(nacas) >= LIMITE_MIN_INTER}
     return naca_par_personne
 
 
@@ -200,7 +209,7 @@ def create_graph_priorites(priorites):
     plt.tight_layout()
 
     graph_path = GRAPH_PRIORITES_PATH
-    plt.savefig(graph_path)
+    plt.savefig(graph_path, dpi=300)
     plt.close()
 
 
@@ -238,7 +247,7 @@ def create_graph_ambulances(ambulances):
     plt.tight_layout()
 
     graph_path = GRAPH_AMBULANCES_PATH
-    plt.savefig(graph_path)
+    plt.savefig(graph_path, dpi=300)
     plt.close()
 
 
@@ -289,7 +298,7 @@ def create_graph_nacas(nacas):
     plt.tight_layout()
 
     graph_path = GRAPH_NACAS_PATH
-    plt.savefig(graph_path)
+    plt.savefig(graph_path, dpi=300)
     plt.close()
 
 
@@ -343,7 +352,7 @@ def create_graph_heures(inter_by_heure):
     plt.tight_layout()
 
     graph_path = GRAPH_INTER_BY_HEURE_PATH
-    plt.savefig(graph_path)
+    plt.savefig(graph_path, dpi=300)
     plt.close()
 
 
@@ -462,7 +471,295 @@ def get_nb_inter_by_heure(lecteur):
     return nb_inter_by_heure
 
 
-def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, motifs_EST, nacas_bas, nacas_hauts, nacas_p3):
+def get_nb_inter_nuit_par_personne(lecteur):
+    nb_inter_nuit_par_personne = {}
+    next(lecteur, None)  # saute l'en-tête
+
+    for ligne in lecteur:
+        leader = ligne[7].strip()
+        equipier = ligne[8].strip()
+        horaire_str = ligne[15].strip()
+
+        if re.match(r'^\d{2}:\d{2}$', horaire_str):
+            heure = int(horaire_str.split(":")[0])
+            if leader:
+                if leader not in nb_inter_nuit_par_personne:
+                    nb_inter_nuit_par_personne[leader] = (
+                        0, 0, 0)  # [total, nuit, pourcentage]
+                if heure >= 2 and heure < 6:  # on considère la nuit de 2h à 6h
+                    nb_inter_nuit_par_personne[leader] = (
+                        nb_inter_nuit_par_personne[leader][0] + 1, nb_inter_nuit_par_personne[leader][1] + 1, 0)
+                else:
+                    nb_inter_nuit_par_personne[leader] = (
+                        nb_inter_nuit_par_personne[leader][0] + 1, nb_inter_nuit_par_personne[leader][1], 0)
+
+            if equipier:
+                if equipier not in nb_inter_nuit_par_personne:
+                    nb_inter_nuit_par_personne[equipier] = (
+                        0, 0, 0)  # [total, nuit, pourcentage]
+                if heure >= 2 and heure < 6:  # on considère la nuit de 2h à 6h
+                    nb_inter_nuit_par_personne[equipier] = (
+                        nb_inter_nuit_par_personne[equipier][0] + 1, nb_inter_nuit_par_personne[equipier][1] + 1, 0)
+                else:
+                    nb_inter_nuit_par_personne[equipier] = (
+                        nb_inter_nuit_par_personne[equipier][0] + 1, nb_inter_nuit_par_personne[equipier][1], 0)
+
+    for personne in nb_inter_nuit_par_personne:
+        nb_total = nb_inter_nuit_par_personne[personne][0]
+        nb_nuit = nb_inter_nuit_par_personne[personne][1]
+        pourcentage = (nb_nuit / nb_total) if nb_total > 0 else 0
+        nb_inter_nuit_par_personne[personne] = (
+            nb_total, nb_nuit, pourcentage)
+
+    sorted_nb_inter_nuit_par_personne = dict(
+        sorted(nb_inter_nuit_par_personne.items(), key=lambda item: item[1][2], reverse=True))
+    return sorted_nb_inter_nuit_par_personne
+
+
+def get_most_interventions_by_personne(lecteur):
+    nb_inter_by_personne = {}
+    next(lecteur, None)  # saute l'en-tête
+
+    for ligne in lecteur:
+        leader = ligne[7].strip()
+        # Supprimer les double espaces éventuels
+        leader = re.sub(' +', ' ', leader)
+
+        equipier = ligne[8].strip()
+        # Supprimer les double espaces éventuels
+        equipier = re.sub(' +', ' ', equipier)
+
+        if leader:
+            if leader not in nb_inter_by_personne:
+                nb_inter_by_personne[leader] = 0
+            nb_inter_by_personne[leader] += 1
+
+        if equipier:
+            if equipier not in nb_inter_by_personne:
+                nb_inter_by_personne[equipier] = 0
+            nb_inter_by_personne[equipier] += 1
+
+    sorted_nb_inter_by_personne = dict(
+        sorted(nb_inter_by_personne.items(), key=lambda item: item[1], reverse=True))
+    return sorted_nb_inter_by_personne
+
+
+def get_most_interventions_by_binome(lecteur):
+    nb_inter_by_binome = {}
+    next(lecteur, None)  # saute l'en-tête
+
+    for ligne in lecteur:
+        leader_raw = ligne[7].strip()
+
+        # Supprimer les double espaces éventuels
+        leader_raw = re.sub(' +', ' ', leader_raw)
+
+        leader = leader_raw.split(" ")[0] + " " + \
+            leader_raw.split(" ")[1][0] + "."
+        equipier_raw = ligne[8].strip()
+
+        # Supprimer les double espaces éventuels
+        equipier_raw = re.sub(' +', ' ', equipier_raw)
+
+        equipier = equipier_raw.split(" ")[0] + " " + \
+            equipier_raw.split(" ")[1][0] + "."
+
+        if leader and equipier:
+            if leader < equipier:
+                binome = f"{leader} et {equipier}"
+            else:
+                binome = f"{equipier} et {leader}"
+            if binome not in nb_inter_by_binome:
+                nb_inter_by_binome[binome] = 0
+            nb_inter_by_binome[binome] += 1
+
+    sorted_nb_inter_by_binome = dict(
+        sorted(nb_inter_by_binome.items(), key=lambda item: item[1], reverse=True))
+    return sorted_nb_inter_by_binome
+
+
+def get_fastest_avc(lecteur):
+    next(lecteur, None)  # saute l'en-tête
+
+    # on initialise le temps minimum à l'infini pour pouvoir le comparer avec les temps calculés
+    temps_min = float('inf')
+    leader_min = None
+    equipier_min = None
+    date_min = None
+
+    for ligne in lecteur:
+        # si la colonne Hopital (index 17) est vide, on ignore la ligne
+        if not ligne[17].strip():
+            continue
+        if ligne[24].strip()[:4] != "1105":
+            continue
+        if ligne[25].strip() != "1":
+            continue
+
+        # extraire l'heure depuis la colonne "alarme" (index 13)
+        alarme_raw = ligne[13].strip()
+        tmp = datetime.strptime(alarme_raw, "%H:%M")
+        sur_site_hour = tmp.hour + tmp.minute / 60
+
+        # extraire l'heure depuis la colonne "hopital" (index 17)
+        hopital_raw = ligne[17].strip()
+        tmp = datetime.strptime(hopital_raw, "%H:%M")
+        hopital_hour = tmp.hour + tmp.minute / 60
+
+        temps_inter = hopital_hour - sur_site_hour
+        if temps_inter < 0:
+            temps_inter += 24  # gérer les cas où l'heure de Québec est le lendemain
+        if temps_inter < temps_min:
+            temps_min = temps_inter
+            leader_min = ligne[7].strip()
+            equipier_min = ligne[8].strip()
+            date_min = ligne[0].strip()
+    # print(
+    #     f"Prise en charge AVC la plus rapide : {decimal_vers_hhmm(temps_min)} par {leader_min} et {equipier_min} le {date_min}")
+    return (temps_min, leader_min, equipier_min, date_min)
+
+
+def get_longest_inter(lecteur):
+    next(lecteur, None)  # saute l'en-tête
+
+    # on initialise le temps maximum à 0 pour pouvoir le comparer avec les temps calculés
+    temps_max = 0
+    leader_max = None
+    equipier_max = None
+    date_max = None
+    fip_max = None
+
+    for ligne in lecteur:
+        # si la colonne Hopital (index 17) est vide, on ignore la ligne
+        if not ligne[17].strip():
+            continue
+
+        # extraire l'heure depuis la colonne "Sur site" (index 15)
+        sur_site_raw = ligne[15].strip()
+        tmp = datetime.strptime(sur_site_raw, "%H:%M")
+        sur_site_hour = tmp.hour + tmp.minute / 60
+
+        # extraire l'heure depuis la colonne "Quebec" (index 16)
+        quebec_raw = ligne[16].strip()
+        tmp = datetime.strptime(quebec_raw, "%H:%M")
+        quebec_hour = tmp.hour + tmp.minute / 60
+
+        temps_inter = quebec_hour - sur_site_hour
+        if temps_inter < 0:
+            temps_inter += 24  # gérer les cas où l'heure de Québec est le lendemain
+        if temps_inter > 10:
+            continue  # on ignore les interventions de moplus de 12h qui sont probablement des erreurs de saisie
+        if temps_inter > temps_max:
+            temps_max = temps_inter
+            leader_max = ligne[7].strip()
+            equipier_max = ligne[8].strip()
+            date_max = ligne[0].strip()
+            fip_max = ligne[3].strip()
+    # print(
+    #     f"Intervention la plus longue : {decimal_vers_hhmm(temps_max)} par {leader_max} et {equipier_max} le {date_max} (FIP: {fip_max})")
+    return (temps_max, leader_max, equipier_max, date_max)
+
+
+def get_patient_age_moyen_by_ambulancier(lecteur):
+    next(lecteur, None)  # saute l'en-tête
+    ambu_ages = {}
+
+    for ligne in lecteur:
+        leader = ligne[7].strip()
+        equipier = ligne[8].strip()
+        age_str = ligne[32].strip()
+
+        if age_str.isdigit():
+            age = int(age_str)
+            if leader not in ambu_ages:
+                ambu_ages[leader] = []
+            ambu_ages[leader].append(age)
+            if equipier not in ambu_ages:
+                ambu_ages[equipier] = []
+            ambu_ages[equipier].append(age)
+
+    ambu_ages_moyen = {personne: np.mean(ages)
+                       for personne, ages in ambu_ages.items()}
+
+    # on garde uniquement les personnes qui ont au moins LIMITE_MIN_INTER interventions pour éviter les biais liés à un petit nombre d'interventions
+    ambu_ages_moyen = {personne: age_moyen for personne, age_moyen in ambu_ages_moyen.items(
+    ) if len(ambu_ages[personne]) >= LIMITE_MIN_INTER}
+
+    sorted_ambu_ages_moyen = dict(
+        sorted(ambu_ages_moyen.items(), key=lambda item: item[1], reverse=True))
+    return sorted_ambu_ages_moyen
+
+
+def get_nbmax_inter_ped(lecteur):
+    next(lecteur, None)  # saute l'en-tête
+    inter_ped = {}
+
+    for ligne in lecteur:
+        leader = ligne[7].strip()
+        equipier = ligne[8].strip()
+        age = ligne[32].strip()
+
+        if age.isdigit() and int(age) < 16:
+            if leader not in inter_ped:
+                inter_ped[leader] = 0
+            inter_ped[leader] += 1
+            if equipier not in inter_ped:
+                inter_ped[equipier] = 0
+            inter_ped[equipier] += 1
+
+    sorted_inter_ped = dict(
+        sorted(inter_ped.items(), key=lambda item: item[1], reverse=True))
+    # on garde que les personnes ayant le plus d'interventions pédiatriques
+    sorted_inter_ped = {personne: count for personne, count in sorted_inter_ped.items(
+    ) if count == max(inter_ped.values())}
+    return sorted_inter_ped
+
+
+def get_max_depart_a_midi(lecteur):
+    next(lecteur, None)  # saute l'en-tête
+    nb_depart_a_midi_by_personne = {}
+
+    for ligne in lecteur:
+        leader = ligne[7].strip()
+        equipier = ligne[8].strip()
+        horaire_str = ligne[14].strip()
+
+        if re.match(r'^\d{2}:\d{2}$', horaire_str):
+            heure = int(horaire_str.split(":")[0])
+            if heure == 12:
+                if leader:
+                    if leader not in nb_depart_a_midi_by_personne:
+                        nb_depart_a_midi_by_personne[leader] = 0
+                    nb_depart_a_midi_by_personne[leader] += 1
+                if equipier:
+                    if equipier not in nb_depart_a_midi_by_personne:
+                        nb_depart_a_midi_by_personne[equipier] = 0
+                    nb_depart_a_midi_by_personne[equipier] += 1
+
+    sorted_nb_depart_a_midi_by_personne = dict(
+        sorted(nb_depart_a_midi_by_personne.items(), key=lambda item: item[1], reverse=True))
+    return sorted_nb_depart_a_midi_by_personne
+
+
+def pdf_header(canvas, doc):
+    canvas.saveState()
+
+    canvas.setFont("Helvetica-Bold", 10)
+
+    # Texte en haut à gauche
+    canvas.drawString(2*cm, 28*cm, "ACE - Rapport mensuel - " +
+                      MOIS.capitalize() + " " + ANNEE)
+
+    # Page actuelle sur nombre de page en haut a droite
+    canvas.drawRightString(19*cm, 28*cm, f"Page {doc.page}/6")
+
+    # Ligne sous l'en-tête
+    canvas.line(2*cm, 27.7*cm, 19*cm, 27.7*cm)
+
+    canvas.restoreState()
+
+
+def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, motifs_EST, nacas_bas, nacas_hauts, nacas_p3, inter_nuit, nb_inter_by_personne, nb_inter_by_binome, fastest_avc, age_moyen_by_ambu, nb_inter_ped, nb_depart_a_midi_by_personne):
     doc = SimpleDocTemplate(OUTPUT_PATH, pagesize=A4)
     styles = getSampleStyleSheet()
     elements = []
@@ -476,11 +773,17 @@ def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, m
         parent=styles['Normal'],
         fontSize=12,     # taille du texte
         leading=16       # interligne
+    ), 'sous_titre': ParagraphStyle(
+        'sous_titre',
+        parent=styles['Normal'],
+        fontSize=20,
+        leading=25
     )}
 
     # Ajouter un titre
     title = Paragraph(
-        "Rapport Mensuel - Interventions Ambulance", styles['Title'])
+        "Rapport Mensuel - Interventions Ambulance<br/>" +
+        MOIS.capitalize() + " " + ANNEE, styles['Title'])
     elements.append(title)
     elements.append(Spacer(1, 0.5 * inch))
 
@@ -491,6 +794,19 @@ def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, m
         f"entre l'urgence et la P3."
     )
     elements.append(Paragraph(texte_nombre_interventions,
+                    style_texte['texte_grand']))
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Ajouter la personne avec le plus d'interventions
+    personne_max = max(nb_inter_by_personne, key=nb_inter_by_personne.get)
+    texte_nb_inter_max = f"C'est <b>{personne_max.split(' ')[0]} {personne_max.split(' ')[1][0]}.</b> qui en a effectué le plus, avec <b>{nb_inter_by_personne[personne_max]}</b> interventions."
+    elements.append(Paragraph(texte_nb_inter_max,
+                    style_texte['texte_grand']))
+
+    # Ajouter le binome avec le plus d'interventions
+    binome_max = max(nb_inter_by_binome, key=nb_inter_by_binome.get)
+    texte_nb_inter_binome_max = f"Et c'est <b>{binome_max}</b> qui en ont effectué le plus ensemble, avec <b>{nb_inter_by_binome[binome_max]}</b> interventions."
+    elements.append(Paragraph(texte_nb_inter_binome_max,
                     style_texte['texte_grand']))
     elements.append(Spacer(1, 0.5 * inch))
 
@@ -505,7 +821,7 @@ def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, m
     for motif, count in motifs_EST.items():
         if motif[:4] == "0000":
             continue  # on ignore les motifs vides ou non renseignés
-        texte_motifs_est += f"{i+1}. {motif} avec <b>{(count / nb_inter_motif_est) * 100:.1f}%</b> ({count}) des interventions <br/>"
+        texte_motifs_est += f"{i+1}. {motif} avec <b>{(count / nb_inter_motif_est) * 100:.1f}%</b> des interventions ({count})<br/>"
         if i >= 4:  # on affiche les 5 motifs les plus courants
             break
         i = i + 1
@@ -514,23 +830,39 @@ def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, m
 
     # Ajouter le temps moyen sur site
     texte_temps_moyen = (
-        f"Et en moyenne, nous avons passé "
+        f"En moyenne, nous avons passé "
         f"<font color='#D62828'><b>{decimal_vers_hhmm(temps_moyen_sur_site)}</b></font>"
         f" sur site."
     )
     elements.append(Paragraph(texte_temps_moyen, style_texte['texte_grand']))
     elements.append(Spacer(1, 0.5 * inch))
 
-    # Ajouter une introduction pour expliquer les graphiques
-    introduction_graphique = "Ci-dessous les graphiques de répartition des interventions par priorités, ambulances et NACAs."
-    elements.append(Paragraph(introduction_graphique,
-                    style_texte['texte_grand']))
+    # Ajouter le temps de prise en charge AVC le plus rapide
+    temps_avc, leader_avc, equipier_avc, date_avc = fastest_avc
+    leader_avc = leader_avc.split(
+        " ")[0] + " " + leader_avc.split(" ")[1][0] + "."
+    equipier_avc = equipier_avc.split(
+        " ")[0] + " " + equipier_avc.split(" ")[1][0] + "."
+    texte_avc_rapide = (
+        f"Bravo à <b>{leader_avc} et {equipier_avc}</b> pour la prise en charge AVC la plus rapide, avec un temps de prise en charge de "
+        f"<font color='#D62828'><b>{decimal_vers_hhmm(temps_avc)}</b></font>"
+        f" entre l'alarme et l'arrivée à l'hôpital, le {date_avc}."
+    )
+    elements.append(Paragraph(texte_avc_rapide, style_texte['texte_grand']))
+    elements.append(Spacer(1, 0.5 * inch))
 
-    # Ajouter les graphiques
+    # Texte idées
+    texte_idees = "(J'en profite pour vous dire que si vous avez des idées de statistiques ou de graphiques que vous aimeriez voir dans ce rapport, n'hésitez pas à les écrire directement dessus au stylo ! Je les ajouterai avec plaisir pour le mois prochain !)"
+    elements.append(Paragraph(texte_idees, style_texte['texte_normal']))
+    elements.append(Spacer(1, 0.5 * inch))
 
-    # Graphique des ambulances
-    img = Image(GRAPH_AMBULANCES_PATH, width=6 * inch, height=4 * inch)
-    elements.append(img)
+    # Ajouter saut de page
+    elements.append(PageBreak())
+
+    # Ajouter une introduction pour expliquer les priorités
+    introduction_priorite = "Priorités des interventions"
+    elements.append(Paragraph(introduction_priorite,
+                    style_texte['sous_titre']))
     elements.append(Spacer(1, 0.5 * inch))
 
     # Graphique des priorités
@@ -541,8 +873,17 @@ def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, m
     # Naca pour la p3
     total_nacas_p3 = sum(nacas_p3.values())
     p3_naca_hauts = sum(nacas_p3[naca] for naca in ["4", "5", "6", "7"])
-    texte_naca_p3 = f"Ce mois ci, en P3, <b>{p3_naca_hauts}</b> interventions sur <b>{total_nacas_p3}</b> ont été classées en NACA 4+, soit <b>{(p3_naca_hauts / total_nacas_p3) * 100:.1f}%</b> des P3."
+    texte_naca_p3 = f"Ce mois ci, en <b><font color='#D62828'>P3</font></b>, <b>{p3_naca_hauts}</b> interventions sur <b>{total_nacas_p3}</b> ont été classées en NACA 4+, soit <b>{(p3_naca_hauts / total_nacas_p3) * 100:.1f}%</b> des P3."
     elements.append(Paragraph(texte_naca_p3, style_texte['texte_grand']))
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # saut de page
+    elements.append(PageBreak())
+
+    # Ajouter une introduction pour expliquer les priorités
+    introduction_naca = "NACAs annoncés au québec"
+    elements.append(Paragraph(introduction_naca,
+                    style_texte['sous_titre']))
     elements.append(Spacer(1, 0.5 * inch))
 
     # Graphique des NACAs
@@ -554,6 +895,8 @@ def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, m
     texte_nacas_par_personne = "Voici les 3 personnes qui se démarquent par leur nombre d'intervention avec des NACAs bas (0, 1, 9) : <br/>"
     i = 0
     for personne, (nb_nacas, nb_nacas_bas, pourcentage) in nacas_bas.items():
+        personne = personne.split(
+            " ")[0] + " " + personne.split(" ")[1][0] + "."
         texte_nacas_par_personne += f"{i+1}. <b>{pourcentage:.1%}</b> des interventions de <b>{personne}</b> ({nb_nacas_bas}/{nb_nacas})<br/>"
         if i >= 2:  # on affiche les 3 permiers
             break
@@ -561,12 +904,22 @@ def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, m
     texte_nacas_par_personne += "<br/>Et voici les 3 personnes qui se démarquent par leur nombre d'intervention avec des NACAs hauts (5, 6, 7) : <br/>"
     i = 0
     for personne, (nb_nacas, nb_nacas_haut, pourcentage) in nacas_hauts.items():
+        personne = personne.split(
+            " ")[0] + " " + personne.split(" ")[1][0] + "."
         texte_nacas_par_personne += f"{i+1}. <b>{pourcentage:.1%}</b> des interventions de <b>{personne}</b> ({nb_nacas_haut}/{nb_nacas})<br/>"
         if i >= 2:  # on affiche les 3 permiers
             break
         i = i + 1
     elements.append(Paragraph(texte_nacas_par_personne,
                     style_texte['texte_normal']))
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # saut de page
+    elements.append(PageBreak())
+
+    # Sous-titre pour les âges
+    sous_titre_ages = "Âges des patients"
+    elements.append(Paragraph(sous_titre_ages, style_texte['sous_titre']))
     elements.append(Spacer(1, 0.5 * inch))
 
     # Texte intro pour le graphique des âges
@@ -583,7 +936,94 @@ def generate_pdf_report(nombre_interventions, temps_moyen_sur_site, age_moyen, m
     elements.append(img)
     elements.append(Spacer(1, 0.5 * inch))
 
-    doc.build(elements)
+    # Texte pour les âges moyens par ambulancier
+    ambu_senior, age_senior = max(
+        age_moyen_by_ambu.items(), key=lambda x: x[1])
+    ambu_senior = ambu_senior.split(
+        " ")[0] + " " + ambu_senior.split(" ")[1][0] + "."
+    ambu_junior, age_junior = min(
+        age_moyen_by_ambu.items(), key=lambda x: x[1])
+    ambu_junior = ambu_junior.split(
+        " ")[0] + " " + ambu_junior.split(" ")[1][0] + "."
+    texte_age_moyen_by_ambu = f"La médaille senior est attribuée à <b>{ambu_senior}</b>, ses patients avaient en moyenne <b>{age_senior:.1f}</b> ans."
+    texte_age_moyen_by_ambu += f"<br/>Alors qu'à l'inverse, les patients de <b>{ambu_junior}</b> avaient en moyenne <b>{age_junior:.1f}</b> ans."
+
+    elements.append(Paragraph(texte_age_moyen_by_ambu,
+                    style_texte['texte_normal']))
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Texte pour les interventions pédiatriques
+    if len(nb_inter_ped) > 1:
+        texte_inter_ped = "C'est <b>"
+        texte_inter_ped += "</b>, <b>".join(
+            [personne.split(" ")[0] + " " + personne.split(" ")[1][0] + "." for personne in nb_inter_ped.keys()])
+        texte_inter_ped += f"</b> qui ont pris en charge le plus de petits-potes (-16 ans) ce mois-ci, avec <b>{list(nb_inter_ped.values())[0]}</b> interventions chacun.e !"
+        elements.append(Paragraph(texte_inter_ped,
+                        style_texte['texte_normal']))
+    else:
+        personne_ped = list(nb_inter_ped.keys())[0]
+        personne_ped = personne_ped.split(
+            " ")[0] + " " + personne_ped.split(" ")[1][0] + "."
+        texte_inter_ped = f"Félicitations à <b>{personne_ped}</b> pour avoir effectué le plus d'interventions pédiatriques ce mois ci, avec <b>{list(nb_inter_ped.values())[0]}</b> interventions !"
+        elements.append(Paragraph(texte_inter_ped,
+                        style_texte['texte_normal']))
+
+    # saut de page
+    elements.append(PageBreak())
+
+    # Texte intro pour le graphique des interventions par heure
+    texte_temps_moyen = (
+        f"Heures d'intervention"
+    )
+    elements.append(Paragraph(texte_temps_moyen, style_texte['sous_titre']))
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Graphique des interventions par heure
+    img = Image(GRAPH_INTER_BY_HEURE_PATH, width=6 * inch, height=4 * inch)
+    elements.append(img)
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Les personne avec le plus d'interventions au milieu de la nuit
+    texte_inter_nuit = "Voici les 3 personnes qui se démarquent par leur nombre d'interventions au milieu de la nuit (2h-6h) : <br/>"
+    i = 0
+    for personne, (nb_total, nb_nuit, pourcentage) in inter_nuit.items():
+        texte_inter_nuit += f"{i+1}. <b>{pourcentage:.1%}</b> des interventions de <b>{personne}</b> ({nb_nuit}/{nb_total})<br/>"
+        if i >= 2:  # on affiche les 3 premiers
+            break
+        i = i + 1
+    elements.append(Paragraph(texte_inter_nuit,
+                    style_texte['texte_normal']))
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Les personnes avec le plus de départ à midi
+    ambu_midi, nb_depart_midi = max(
+        nb_depart_a_midi_by_personne.items(), key=lambda x: x[1])
+    texte_depart_midi = f"Petite pensée pour <b>{ambu_midi}</b> qui s'est fait interrompre le repas de midi le plus de fois, avec <b>{nb_depart_midi}</b> départs à midi ce mois-ci !"
+    elements.append(Paragraph(texte_depart_midi,
+                    style_texte['texte_normal']))
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # saut de page
+    elements.append(PageBreak())
+
+    # Texte intro pour le graphique des Ambulances
+    texte_temps_moyen = (
+        f"Ambulances"
+    )
+    elements.append(Paragraph(texte_temps_moyen, style_texte['sous_titre']))
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # Graphique des ambulances
+    img = Image(GRAPH_AMBULANCES_PATH, width=6 * inch, height=4 * inch)
+    elements.append(img)
+    elements.append(Spacer(1, 0.5 * inch))
+
+    # PS pour expliquer que j'eneleve les personne qui ont fait moins de LIMITE_MIN_INTER interventions pour éviter les biais liés à un petit nombre d'interventions
+    texte_ps = f"PS: pour les statistiques par personne, je n'ai pris en compte que les personnes ayant effectué au moins <b>{LIMITE_MIN_INTER}</b> interventions ce mois-ci pour éviter les biais liés à un petit nombre d'interventions."
+    elements.append(Paragraph(texte_ps, style_texte['texte_normal']))
+
+    # Genérer le PDF
+    doc.build(elements, onFirstPage=pdf_header, onLaterPages=pdf_header)
 
 
 def main():
@@ -624,6 +1064,13 @@ def main():
         create_graph_ages(ages)
         print("Graphique des âges généré.")
 
+        # Génération du graphique des interventions par heure
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        inter_by_heure = get_nb_inter_by_heure(lecteur)
+        create_graph_heures(inter_by_heure)
+        print("Graphique des interventions par heure généré.")
+
         # Calcul du temps sur site
         csvfile.seek(0)  # revenir au début du fichier pour relire les données
         lecteur = csv.reader(csvfile, delimiter=";")
@@ -654,9 +1101,53 @@ def main():
         nacas_p3 = get_naca_of_p3(lecteur)
         print("Calcul du nombre de NACAs pour les P3 terminé.")
 
+        # Calcul du nombre d'interventions par personne au milieu de la nuit
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        inter_nuit = get_nb_inter_nuit_par_personne(lecteur)
+        print("Calcul du nombre d'interventions par personne au milieu de la nuit terminé.")
+
+        # Calcul du nombre d'interventions par personne
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        nb_inter_by_personne = get_most_interventions_by_personne(lecteur)
+        print("Calcul du nombre d'interventions par personne terminé.")
+
+        # Calcul du nombre d'interventions par binome
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        nb_inter_by_binome = get_most_interventions_by_binome(lecteur)
+        print("Calcul du nombre d'interventions par binome terminé.")
+
+        # Calcul du temps de prise en charge AVC le plus rapide
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        fastest_avc = get_fastest_avc(lecteur)
+        print("Calcul du temps de prise en charge AVC le plus rapide terminé.")
+
+        # Calcul de l'age moyen des patients par ambulancier
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        age_moyen_by_ambu = get_patient_age_moyen_by_ambulancier(lecteur)
+        print("Calcul des âges moyens des patients par ambulancier terminé.")
+
+        # Calcul de la personne avec le plus d'interventions pédiatriques
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        nb_inter_ped = get_nbmax_inter_ped(lecteur)
+        print("Calcul de la personne avec le plus d'interventions pédiatriques terminé.")
+
+        # Calcul du nombre de départ à midi par personne
+        csvfile.seek(0)  # revenir au début du fichier pour relire les données
+        lecteur = csv.reader(csvfile, delimiter=";")
+        nb_depart_a_midi_by_personne = get_max_depart_a_midi(lecteur)
+        print("Calcul du nombre de départ à midi par personne terminé.")
+
         generate_pdf_report(
-            nb_interventions_total, temps_sur_site['moyenne'], age_moyen=np.mean(ages), motifs_EST=motifs_EST, nacas_bas=nacas_bas, nacas_hauts=nacas_hauts, nacas_p3=nacas_p3)
+            nb_interventions_total, temps_sur_site['moyenne'], age_moyen=np.mean(ages), motifs_EST=motifs_EST, nacas_bas=nacas_bas, nacas_hauts=nacas_hauts, nacas_p3=nacas_p3, inter_nuit=inter_nuit, nb_inter_by_personne=nb_inter_by_personne, nb_inter_by_binome=nb_inter_by_binome, fastest_avc=fastest_avc, age_moyen_by_ambu=age_moyen_by_ambu, nb_inter_ped=nb_inter_ped, nb_depart_a_midi_by_personne=nb_depart_a_midi_by_personne)
         print(f"Rapport PDF généré : {OUTPUT_PATH}")
+
+        print("ATTENTION AU DOUBLE ESPACE DANS LE FICHIER CSV")
 
 
 def tests():
@@ -665,20 +1156,14 @@ def tests():
 
     with open(chemin_fichier, newline="", encoding="utf-8") as csvfile:
         lecteur = csv.reader(csvfile, delimiter=";")
-        inter_by_heure = get_nb_inter_by_heure(lecteur)
-        print("Nombre d'interventions par heure :")
-        print(inter_by_heure)
-        for heure, count in inter_by_heure.items():
-            print(f"{heure}h : {count} interventions")
-        create_graph_heures(inter_by_heure)
-        print("Graphique des interventions par heure généré.")
-
+        result = get_nbmax_inter_ped(lecteur)
+        print(f"Personne avec le plus d'interventions pédiatriques : {result}")
 
 # ====== EXECUTION =====
 
 
-# main()
-tests()
+main()
+# tests()
 
 # === TODO ===
 
@@ -691,18 +1176,17 @@ tests()
 # DONE : personne avec le plus de naca haut
 # DONE : personne avec le plus de naca bas
 # DONE : p3 qui finissent en naca haut
+# DONE : le plus d'intervention en 2 et 5h
+# DONE : qui a fait le plus d'interventions
+# DONE : le binome avec le plus d'interventions
+# DONE : prise en charge avc la plus rapide
 #
 #
-# le plus d'intervention en 2 et 5h
 #
 #
-# qui a fait le plus d'interventions
-# pourcentga de leader/secondage
-# le binome avec le plus d'interventions
-# sur place le plus court avec transport
-# prise en charge avc la plus rapide
-# polytrauma le plus rapide
-# le plus d'oh
+# polytrauma le plus rapide pas assez de données
+# le plus d'oh   donnée annuel ?
 # ple plus de ped
 # inter la plus longue
 # 42 le plus long
+# pourcentga de leader/secondage
