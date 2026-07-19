@@ -8,13 +8,9 @@ tests/tmp/*
 /tmp/
 /tmp*/
 
-# Les exports contiennent des données opérationnelles : ils restent locaux par
-# défaut. Les fichiers déjà suivis par Git ne sont pas supprimés par cette règle.
-data/*.csv
-data/*.xlsx
-data/*.xlsm
+# Les exports contiennent des données opérationnelles sensibles et restent
+# strictement locaux. Le dossier complet est donc exclu du dépôt.
+/data/
 
 # Les rapports et graphiques sont reproductibles à partir des données sources.
-output/*.pdf
-output/*.png
-output/graphs/
+/output/
