@@ -1,0 +1,8 @@
+# Génération des six graphiques du rapport.
+matplotlib>=3.8,<4
+
+# Composition et pagination du rapport PDF.
+reportlab>=4,<5
+
+# Lecture directe des exports XLSX ; les CSV restent utilisables sans ce module.
+openpyxl>=3.1,<4
