@@ -1,0 +1,5 @@
+# Les données opérationnelles restent exclusivement locales.
+/data/
+
+# Les rapports et graphiques sont générés localement depuis les données.
+/output/
